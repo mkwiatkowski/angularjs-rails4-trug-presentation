@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>AngularJS + Rails 4</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <style type="text/css">
+      @import url(http://fonts.googleapis.com/css?family=Droid+Serif);
+      @import url(http://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+
+      body {
+        font-family: 'Droid Serif';
+        font-size: 26px;
+      }
+      pre { font-size: 22px; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: 400;
+        margin-bottom: 0;
+      }
+      h1 { font-size: 3.5em; }
+      h2 { font-size: 2em; }
+      h3 { font-size: 1.6em; }
+      li p { line-height: 1.25em; }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+class: center, middle
+
+# AngularJS + Rails 4
+
+Michał Kwiatkowski
+
+[@michalkw](https://twitter.com/michalkw)
+
+---
+
+# The example: [demo](http://todo-rails4-angularjs.shellyapp.com/)
+
+---
+
+# The example
+
+* A standard Rails 4 app with devise.
+
+* RESTful JSON API usable by AngularJS and standalone.
+
+* ToDo list management application.
+
+```ruby
+class Task < ActiveRecord::Base
+end
+```
+
+```ruby
+class TaskList < ActiveRecord::Base
+  has_many :tasks
+end
+```
+
+---
+
+# [active_model_serializers](https://github.com/rails-api/active_model_serializers/)
+
+```ruby
+# app/serializers/task_serializer.rb
+class TaskSerializer < ActiveModel::Serializer
+  attributes :id, :description, :priority,
+    :due_date, :completed
+end
+```
+
+---
+
+# Render JSON
+
+Whenever you render an object or an array of objects to json, a proper serializer will be used.
+
+```
+render json: TaskList.find(params[:id]).tasks
+```
+
+---
+
+# API output
+
+```
+[
+ {'id' => 123,
+  'description' => 'Send newsletter',
+  'priority' => 2,
+  'due_date' => '2013-09-10',
+  'completed' => true},
+ {'id' => 124,
+  'description' => 'Prepare presentation',
+  'priority' => 1,
+  'due_date' => '2013-09-17',
+  'completed' => false}
+]
+```
+
+---
+
+# Detail #1
+
+To get this format, you have to configure the gem properly:
+
+```ruby
+# config/initializers/active_model_serializers.rb
+ActiveSupport.on_load(:active_model_serializers) do
+  # Disable for all serializers (except ArraySerializer)
+  ActiveModel::Serializer.root = false
+
+  # Disable for ArraySerializer
+  ActiveModel::ArraySerializer.root = false
+end
+```
+
+This will become important later on.
+
+---
+
+# Saving/Updating records
+
+Remember about `require` and `permit`.
+
+I like to create a helper method than can be used both in create and update:
+
+```ruby
+def safe_params
+  params.require(:task).
+    permit(:description, :priority, :completed)
+end
+```
+
+---
+
+# Saving/Updating records
+
+Then the action implementation looks like this:
+
+```
+def create
+  task = task_list.tasks.create!(safe_params)
+  render json: task
+end
+
+def update
+  task.update_attributes(safe_params)
+  render nothing: true
+end
+```
+
+---
+
+# Routing
+
+Pretty standard, just use `format: :json` as the default.
+
+```ruby
+namespace :api, defaults: {format: :json} do
+  resources :task_lists, only: [:index] do
+    resources :tasks, only: [:index, :create, :update,
+      :destroy]
+  end
+end
+```
+
+---
+
+# Routing
+
+`$ rake routes`
+
+```
+GET    /api/task_lists(.:format)
+
+GET    /api/task_lists/:task_list_id/tasks(.:format)
+POST   /api/task_lists/:task_list_id/tasks(.:format)
+PATCH  /api/task_lists/:task_list_id/tasks/:id(.:format)
+DELETE /api/task_lists/:task_list_id/tasks/:id(.:format)
+```
+
+---
+
+# Testing: manual
+
+```bash
+HOST=http://todo-rails4-angularjs.shellyapp.com
+
+curl -s $HOST/api/session -d '' -u $EMAIL:$PASSWORD |
+  json_pp
+
+curl -s $HOST/api/task_lists/$ID/tasks?auth_token=$TOKEN |
+  json_pp
+
+curl $HOST/api/task_lists/$ID/tasks?auth_token=$TOKEN \
+  -d '{"task": {"description": "Task from API"}}' \
+  -H 'Content-Type: application/json'
+```
+
+---
+
+# Testing: automated
+
+```ruby
+describe Api::TasksController do
+  before do
+    sign_in(user)
+  end
+
+  it "should be able to create a new record" do
+    post :create, task_list_id: task_list.id,
+      task: {description: "New task"}, format: :json
+    response.should be_success
+    JSON.parse(response.body).should == {'id' => 123, ...}
+  end
+end
+```
+
+---
+
+# Detail #2
+
+## format: :json
+
+When using flat params it doesn't matter, but it is needed when passing nested attributes, so it's best to get into the habit.
+
+---
+
+# json_response
+
+```
+# spec_helper.rb
+RSpec.configure do |config|
+  config.include JsonApiHelpers, type: :controller
+end
+
+module JsonApiHelpers
+  def json_response
+    @json_response ||= JSON.parse(response.body)
+  end
+end
+```
+
+---
+
+# json_response
+
+With this, instead of:
+
+```
+JSON.parse(response.body).should == {...}
+```
+
+you can write:
+
+```
+json_response.should == {...}
+```
+
+---
+
+# AngularJS app
+
+## Layout
+
+app/views/layouts/application.html.slim
+
+```
+= javascript_include_tag "//ajax.googleapis.com/ajax/libs/
+angularjs/1.0.8/angular.min.js"
+= javascript_include_tag "//ajax.googleapis.com/ajax/libs/
+angularjs/1.0.8/angular-resource.min.js"
+```
+
+---
+
+# AngularJS app
+
+## Main application module
+
+app/assets/javascripts/todoApp.js.coffee
+
+```coffeescript
+todoApp = angular.module('todoApp', ['ngResource'])
+```
+
+---
+
+# The view
+
+app/views/task_lists/show.html.slim
+
+```xml
+div(ng-app='todoApp'
+    ng-controller="TodoListController"
+    ng-init="init(#{@task_list.id})")
+  form(ng-submit="addTask()")
+    input(type="text" ng-model="taskDescription")
+    input(class="btn-primary" type="submit" value="add")
+  ul
+    li(ng-repeat="task in tasks")
+      ' {{task.description}}
+```
+
+---
+
+# The controller
+
+```
+angular.module('todoApp').
+    controller "TodoListController", ($scope, Task) ->
+
+  $scope.init = (taskListId) ->
+    @taskService = new Task(taskListId)
+    $scope.tasks = @taskService.all()
+
+  $scope.addTask = ->
+    task = @taskService.create(description:
+      $scope.taskDescription)
+    $scope.tasks.unshift(task)
+    $scope.taskDescription = ""
+```
+
+---
+
+# The service
+
+```
+angular.module('todoApp').factory 'Task', ($resource) ->
+  class Task
+    constructor: (taskListId) ->
+      @service = $resource('/api/task_lists/:task_list_id/
+        tasks/:id', {task_list_id: taskListId, id: '@id'})
+
+    create: (attrs) ->
+      new @service(task: attrs).$save (task) ->
+        attrs.id = task.id
+      attrs
+
+    all: ->
+      @service.query()
+```
+
+---
+
+# Detail #3
+
+## CSRF token fix
+
+```
+todoApp.config ($httpProvider) ->
+  authToken = $("meta[name=\"csrf-token\"]").
+    attr("content")
+  $httpProvider.defaults.headers.
+    common["X-CSRF-TOKEN"] = authToken
+```
+
+---
+
+# Testing
+
+* [Karma](http://karma-runner.github.io/0.10/index.html)
+
+* [Jasmine](http://pivotal.github.io/jasmine/)
+
+* [angular-mocks](http://code.angularjs.org/1.0.8/angular-mocks.js)
+
+* `lib/tasks/karma.rake`
+
+```
+desc "Run karma test runner for JavaScript tests"
+task :karma do
+  sh "CHROME_BIN=chromium-browser karma start
+    jstest/config.coffee"
+end
+```
+
+---
+
+# Detail #4
+
+## Asset Pipeline
+
+config/environments/production.rb
+
+```
+config.assets.js_compressor = Uglifier.new(mangle: false)
+```
+
+---
+
+# Detail #5
+
+## Turbolinks
+
+```ruby
+$(document).on 'page:load', ->
+  $('[ng-app]').each ->
+    module = $(this).attr('ng-app')
+    angular.bootstrap(this, [module])
+```
+
+---
+
+# Detail #6
+
+## PATCH method in ng-resource
+
+```coffeescript
+$resource('/api/task_lists/:task_list_id/tasks/:id',
+  {task_list_id: taskListId, id: '@id'},
+  {update: {method: 'PATCH'}})
+```
+
+```coffeescript
+defaults = $http.defaults.headers
+defaults.patch = defaults.patch || {}
+defaults.patch['Content-Type'] = 'application/json'
+```
+
+---
+
+# AngularJS impressions
+
+## Sorting
+
+```
+angular.module('todoApp').
+    controller "TodoListController", ($scope, Task) ->
+  $scope.sortMethod = 'priority'
+```
+
+```
+ul
+  li(ng-repeat="task in tasks | orderBy:sortMethod")
+    ' {{task.description}}
+```
+
+---
+
+# Authentication
+
+Devise does most of the work, session cookie carries authentication, so no change is needed in AngularJS.
+
+```ruby
+before_filter :authenticate_user!
+```
+
+## Off-topic
+
+[Enabling token authentication](https://github.com/mkwiatkowski/todo-rails4-angularjs/commit/895a74aa8da675be0119bdff7af8d6d4402d43f7), so the API can be used outside of a browser.
+
+---
+
+# Questions?
+
+---
+
+# Resources
+
+* [AngularJS](http://angularjs.org/)
+
+* [Rails 4 release notes](http://edgeguides.rubyonrails.org/4_0_release_notes.html)
+
+* [angularjs-rails-resource](https://github.com/FineLinePrototyping/angularjs-rails-resource)
+
+This presentation was made in [remark](https://github.com/gnab/remark).
+
+    </textarea>
+    <script src="http://gnab.github.io/remark/downloads/remark-0.5.5.min.js" type="text/javascript">
+    </script>
+    <script type="text/javascript">
+      var hljs = remark.highlighter.engine;
+    </script>
+    <script src="remark.language.js" type="text/javascript"></script>
+    <script type="text/javascript">
+      var slideshow = remark.create({
+          highlightLanguage: 'remark'
+        }) ;
+    </script>
+  </body>
+</html>
